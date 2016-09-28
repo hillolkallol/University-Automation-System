@@ -1,0 +1,34 @@
+/* This CSS for small Mobile*/
+@media (max-width: 767px) {
+.logo {margin-left: 42px; width: 50%;}
+.single_promotion {margin-bottom:50px}
+.newsletter_signup form {overflow:hidden;margin-bottom:25px}
+.testimonial_content .tab-pane {margin: 0;}
+a#simple-menu {display:block}
+.footer_menu {display:none}
+
+}
+
+/* This CSS for Tablet */
+@media (min-width: 768px) {
+.logo {width: 380px;}
+.testimonial_content .tab-pane {margin: 0;}
+a#simple-menu {display:none}
+.footer_menu {display:block}
+}
+
+/* This CSS for Medium Devices */
+@media (min-width: 992px) {
+.logo {width: auto;}
+.testimonial_content .tab-pane {margin: 0 170px;}
+a#simple-menu {display:none}
+.footer_menu {display:block}
+}
+
+/* This CSS for Large Devices */
+@media (min-width: 1200px) {
+.logo {width: auto;}
+.testimonial_content .tab-pane {margin: 0 170px;}
+a#simple-menu {display:none}
+.footer_menu {display:block}
+}

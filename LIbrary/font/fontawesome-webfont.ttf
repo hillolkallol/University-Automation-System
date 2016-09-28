@@ -1,0 +1,1638 @@
+nsizeable.append(colNo)
+                minimums[colNo] = final
+                totalMinimum += final
+            else:
+                given.append(colNo)
+        if len(given) == self._ncols:
+            return
+        if verbose: print('predefined width:   ',given)
+        if verbose: print('uncomputable width: ',unsizeable)
+        if verbose: print('computable width:   ',sizeable)
+
+        # how much width is left:
+        remaining = availWidth - (totalMinimum + totalDefined)
+        if remaining > 0:
+            # we have some room left; fill it.
+            definedPercentage = (totalDefined/availWidth)*100
+            percentTotal += definedPercentage
+            if numberUndefined and percentTotal < 100:
+                undefined = numberGreedyUndefined or numberUndefined
+                defaultWeight = (100-percentTotal)/undefined
+                percentTotal = 100
+                defaultDesired = (defaultWeight/percentTotal)*availWidth
+            else:
+                defaultWeight = defaultDesired = 1
+            # we now calculate how wide each column wanted to be, and then
+            # proportionately shrink that down to fit the remaining available
+            # space.  A column may not shrink less than its minimum width,
+            # however, which makes this a bit more complicated.
+            desiredWidths = []
+            totalDesired = 0
+            effectiveRemaining = remaining
+            for colNo, minimum in minimums.items():
+                w = W[colNo]
+                if _endswith(w,'%'):
+                    desired = (float(w[:-1])/percentTotal)*availWidth
+                elif w == '*':
+                    desired = defaultDesired
+                else:
+                    desired = not numberGreedyUndefined and defaultDesired or 1
+                if desired <= minimum:
+                    W[colNo] = minimum
+                else:
+                    desiredWidths.append(
+                        (desired-minimum, minimum, desired, colNo))
+                    totalDesired += desired
+                    effectiveRemaining += minimum
+            if desiredWidths: # else we're done
+                # let's say we have two variable columns.  One wanted
+                # 88 points, and one wanted 264 points.  The first has a
+                # minWidth of 66, and the second of 55.  We have 71 points
+                # to divide up in addition to the totalMinimum (i.e.,
+                # remaining==71).  Our algorithm tries to keep the proportion
+                # of these variable columns.
+                #
+                # To do this, we add up the minimum widths of the variable
+                # columns and the remaining width.  That's 192.  We add up the
+                # totalDesired width.  That's 352.  That means we'll try to
+                # shrink the widths by a proportion of 192/352--.545454.
+                # That would make the first column 48 points, and the second
+                # 144 points--adding up to the desired 192.
+                #
+                # Unfortunately, that's too small for the first column.  It
+                # must be 66 points.  Therefore, we go ahead and save that
+                # column width as 88 points.  That leaves (192-88==) 104
+                # points remaining.  The proportion to shrink the remaining
+                # column is (104/264), which, multiplied  by the desired
+                # width of 264, is 104: the amount assigned to the remaining
+                # column.
+                proportion = effectiveRemaining/totalDesired
+                # we sort the desired widths by difference between desired and
+                # and minimum values, a value called "disappointment" in the
+                # code.  This means that the columns with a bigger
+                # disappointment will have a better chance of getting more of
+                # the available space.
+                desiredWidths.sort()
+                finalSet = []
+                for disappointment, minimum, desired, colNo in desiredWidths:
+                    adjusted = proportion * desired
+                    if adjusted < minimum:
+                        W[colNo] = minimum
+                        totalDesired -= desired
+                        effectiveRemaining -= minimum
+                        if totalDesired:
+                            proportion = effectiveRemaining/totalDesired
+                    else:
+                        finalSet.append((minimum, desired, colNo))
+                for minimum, desired, colNo in finalSet:
+                    adjusted = proportion * desired
+                    assert adjusted >= minimum
+                    W[colNo] = adjusted
+        else:
+            for colNo, minimum in minimums.items():
+                W[colNo] = minimum
+        if verbose: print('new widths are:', W)
+        self._argW = self._colWidths = W
+        return W
+
+    def minWidth(self):
+        W = list(self._argW)
+        width = 0
+        elementWidth = self._elementWidth
+        rowNos = xrange(self._nrows)
+        values = self._cellvalues
+        styles = self._cellStyles
+        for colNo in xrange(len(W)):
+            w = W[colNo]
+            if w is None or w=='*' or _endswith(w,'%'):
+                final = 0
+                for rowNo in rowNos:
+                    value = values[rowNo][colNo]
+                    style = styles[rowNo][colNo]
+                    new = (elementWidth(value,style)+
+                           style.leftPadding+style.rightPadding)
+                    final = max(final, new)
+                width += final
+            else:
+                width += float(w)
+        return width # XXX + 1/2*(left and right border widths)
+
+    def _calcSpanRanges(self):
+        """Work out rects for tables which do row and column spanning.
+
+        This creates some mappings to let the later code determine
+        if a cell is part of a "spanned" range.
+        self._spanRanges shows the 'coords' in integers of each
+        'cell range', or None if it was clobbered:
+        (col, row) -> (col0, row0, col1, row1)
+
+        Any cell not in the key is not part of a spanned region
+        """
+        self._spanRanges = spanRanges = {}
+        for x in xrange(self._ncols):
+            for y in xrange(self._nrows):
+                spanRanges[x,y] = (x, y, x, y)
+        self._colSpanCells = []
+        self._rowSpanCells = []
+        csa = self._colSpanCells.append
+        rsa = self._rowSpanCells.append
+        for (cmd, start, stop) in self._spanCmds:
+            x0, y0 = start
+            x1, y1 = stop
+
+            #normalize
+            if x0 < 0: x0 = x0 + self._ncols
+            if x1 < 0: x1 = x1 + self._ncols
+            if y0 < 0: y0 = y0 + self._nrows
+            if y1 < 0: y1 = y1 + self._nrows
+            if x0 > x1: x0, x1 = x1, x0
+            if y0 > y1: y0, y1 = y1, y0
+
+            if x0!=x1 or y0!=y1:
+                if x0!=x1: #column span
+                    for y in xrange(y0, y1+1):
+                        for x in xrange(x0,x1+1):
+                            csa((x,y))
+                if y0!=y1: #row span
+                    for y in xrange(y0, y1+1):
+                        for x in xrange(x0,x1+1):
+                            rsa((x,y))
+
+                for y in xrange(y0, y1+1):
+                    for x in xrange(x0,x1+1):
+                        spanRanges[x,y] = None
+                # set the main entry
+                spanRanges[x0,y0] = (x0, y0, x1, y1)
+
+    def _calcNoSplitRanges(self):
+        """
+        This creates some mappings to let the later code determine
+        if a cell is part of a "nosplit" range.
+        self._nosplitRanges shows the 'coords' in integers of each
+        'cell range', or None if it was clobbered:
+        (col, row) -> (col0, row0, col1, row1)
+
+        Any cell not in the key is not part of a spanned region
+        """
+        self._nosplitRanges = nosplitRanges = {}
+        for x in xrange(self._ncols):
+            for y in xrange(self._nrows):
+                nosplitRanges[x,y] = (x, y, x, y)
+        self._colNoSplitCells = []
+        self._rowNoSplitCells = []
+        csa = self._colNoSplitCells.append
+        rsa = self._rowNoSplitCells.append
+        for (cmd, start, stop) in self._nosplitCmds:
+            x0, y0 = start
+            x1, y1 = stop
+
+            #normalize
+            if x0 < 0: x0 = x0 + self._ncols
+            if x1 < 0: x1 = x1 + self._ncols
+            if y0 < 0: y0 = y0 + self._nrows
+            if y1 < 0: y1 = y1 + self._nrows
+            if x0 > x1: x0, x1 = x1, x0
+            if y0 > y1: y0, y1 = y1, y0
+
+            if x0!=x1 or y0!=y1:
+                #column span
+                if x0!=x1:
+                    for y in xrange(y0, y1+1):
+                        for x in xrange(x0,x1+1):
+                            csa((x,y))
+                #row span
+                if y0!=y1:
+                    for y in xrange(y0, y1+1):
+                        for x in xrange(x0,x1+1):
+                            rsa((x,y))
+
+                for y in xrange(y0, y1+1):
+                    for x in xrange(x0,x1+1):
+                        nosplitRanges[x,y] = None
+                # set the main entry
+                nosplitRanges[x0,y0] = (x0, y0, x1, y1)
+
+    def _calcSpanRects(self):
+        """Work out rects for tables which do row and column spanning.
+
+        Based on self._spanRanges, which is already known,
+        and the widths which were given or previously calculated,
+        self._spanRects shows the real coords for drawing:
+            
+            (col, row) -> (x, y, width, height)
+
+        for each cell.  Any cell which 'does not exist' as another
+        has spanned over it will get a None entry on the right
+        """
+        spanRects = getattr(self,'_spanRects',{})
+        hmax = getattr(self,'_hmax',None)
+        longTable = self._longTableOptimize
+        if spanRects and (longTable and hmax==self._hmax_spanRects or not longTable):
+            return
+        colpositions = self._colpositions
+        rowpositions = self._rowpositions
+        vBlocks = {}
+        hBlocks = {}
+        rlim = len(rowpositions)-1
+        for (coord, value) in self._spanRanges.items():
+            if value is None:
+                spanRects[coord] = None
+            else:
+                col0, row0, col1, row1 = value
+                if row1>=rlim: continue
+                col,row = coord
+                if col1-col0>0:
+                    for _ in xrange(col0+1,col1+1):
+                        vBlocks.setdefault(colpositions[_],[]).append((rowpositions[row1+1],rowpositions[row0]))
+                if row1-row0>0:
+                    for _ in xrange(row0+1,row1+1):
+                        hBlocks.setdefault(rowpositions[_],[]).append((colpositions[col0],colpositions[col1+1]))
+                x = colpositions[col0]
+                y = rowpositions[row1+1]
+                width = colpositions[col1+1] - x
+                height = rowpositions[row0] - y
+                spanRects[coord] = (x, y, width, height)
+
+        for _ in hBlocks, vBlocks:
+            for value in _.values():
+                value.sort()
+        self._spanRects = spanRects
+        self._vBlocks = vBlocks
+        self._hBlocks = hBlocks
+        self._hmax_spanRects = hmax
+
+    def setStyle(self, tblstyle):
+        if not isinstance(tblstyle,TableStyle):
+            tblstyle = TableStyle(tblstyle)
+        for cmd in tblstyle.getCommands():
+            self._addCommand(cmd)
+        for k,v in tblstyle._opts.items():
+            setattr(self,k,v)
+        for a in ('spaceBefore','spaceAfter'):
+            if not hasattr(self,a) and hasattr(tblstyle,a):
+                setattr(self,a,getattr(tblstyle,a))
+
+    def _addCommand(self,cmd):
+        if cmd[0] in ('BACKGROUND','ROWBACKGROUNDS','COLBACKGROUNDS'):
+            self._bkgrndcmds.append(cmd)
+        elif cmd[0] == 'SPAN':
+            self._spanCmds.append(cmd)
+        elif cmd[0] == 'NOSPLIT':
+            # we expect op, start, stop
+            self._nosplitCmds.append(cmd)
+        elif _isLineCommand(cmd):
+            # we expect op, start, stop, weight, colour, cap, dashes, join
+            cmd = list(cmd)
+            if len(cmd)<5: raise ValueError('bad line command '+ascii(cmd))
+
+            #determine line cap value at position 5. This can be str or numeric.
+            if len(cmd)<6:
+                cmd.append(1)
+            else:
+                cap = _convert2int(cmd[5], LINECAPS, 0, 2, 'cap', cmd)
+                cmd[5] = cap
+
+            #dashes at index 6 - this is a dash array:
+            if len(cmd)<7: cmd.append(None)
+
+            #join mode at index 7 - can be str or numeric, look up as for caps
+            if len(cmd)<8: cmd.append(1)
+            else:
+                join = _convert2int(cmd[7], LINEJOINS, 0, 2, 'join', cmd)
+                cmd[7] = join
+
+            #linecount at index 8.  Default is 1, set to 2 for double line.
+            if len(cmd)<9: cmd.append(1)
+            else:
+                lineCount = cmd[8]
+                if lineCount is None:
+                    lineCount = 1
+                    cmd[8] = lineCount
+                assert lineCount >= 1
+            #linespacing at index 9. Not applicable unless 2+ lines, defaults to line
+            #width so you get a visible gap between centres
+            if len(cmd)<10: cmd.append(cmd[3])
+            else:
+                space = cmd[9]
+                if space is None:
+                    space = cmd[3]
+                    cmd[9] = space
+            assert len(cmd) == 10
+
+            self._linecmds.append(tuple(cmd))
+        else:
+            (op, (sc, sr), (ec, er)), values = cmd[:3] , cmd[3:]
+            if sc < 0: sc = sc + self._ncols
+            if ec < 0: ec = ec + self._ncols
+            if sr < 0: sr = sr + self._nrows
+            if er < 0: er = er + self._nrows
+            for i in xrange(sr, er+1):
+                for j in xrange(sc, ec+1):
+                    _setCellStyle(self._cellStyles, i, j, op, values)
+
+    def _drawLines(self):
+        ccap, cdash, cjoin = None, None, None
+        self.canv.saveState()
+        for op, (sc,sr), (ec,er), weight, color, cap, dash, join, count, space in self._linecmds:
+            if isinstance(sr,strTypes) and sr.startswith('split'): continue
+            if sc < 0: sc = sc + self._ncols
+            if ec < 0: ec = ec + self._ncols
+            if sr < 0: sr = sr + self._nrows
+            if er < 0: er = er + self._nrows
+            if cap!=None and ccap!=cap:
+                self.canv.setLineCap(cap)
+                ccap = cap
+            if dash is None or dash == []:
+                if cdash is not None:
+                    self.canv.setDash()
+                    cdash = None
+            elif dash != cdash:
+                self.canv.setDash(dash)
+                cdash = dash
+            if join is not None and cjoin!=join:
+                self.canv.setLineJoin(join)
+                cjoin = join
+            getattr(self,_LineOpMap.get(op, '_drawUnknown' ))( (sc, sr), (ec, er), weight, color, count, space)
+        self.canv.restoreState()
+        self._curcolor = None
+
+    def _drawUnknown(self,  start, end, weight, color, count, space):
+        #we are only called from _drawLines which is one level up
+        import sys
+        op = sys._getframe(1).f_locals['op']
+        raise ValueError("Unknown line command '%s'" % op)
+
+    def _drawGrid(self, start, end, weight, color, count, space):
+        self._drawBox( start, end, weight, color, count, space)
+        self._drawInnerGrid( start, end, weight, color, count, space)
+
+    def _drawBox(self,  start, end, weight, color, count, space):
+        sc,sr = start
+        ec,er = end
+        self._drawHLines((sc, sr), (ec, sr), weight, color, count, space)
+        self._drawHLines((sc, er+1), (ec, er+1), weight, color, count, space)
+        self._drawVLines((sc, sr), (sc, er), weight, color, count, space)
+        self._drawVLines((ec+1, sr), (ec+1, er), weight, color, count, space)
+
+    def _drawInnerGrid(self, start, end, weight, color, count, space):
+        sc,sr = start
+        ec,er = end
+        self._drawHLines((sc, sr+1), (ec, er), weight, color, count, space)
+        self._drawVLines((sc+1, sr), (ec, er), weight, color, count, space)
+
+    def _prepLine(self, weight, color):
+        if color and color!=self._curcolor:
+            self.canv.setStrokeColor(color)
+            self._curcolor = color
+        if weight and weight!=self._curweight:
+            self.canv.setLineWidth(weight)
+            self._curweight = weight
+
+    def _drawHLines(self, start, end, weight, color, count, space):
+        sc,sr = start
+        ec,er = end
+        ecp = self._colpositions[sc:ec+2]
+        rp = self._rowpositions[sr:er+1]
+        if len(ecp)<=1 or len(rp)<1: return
+        self._prepLine(weight, color)
+        scp = ecp[0]
+        ecp = ecp[-1]
+        hBlocks = getattr(self,'_hBlocks',{})
+        canvLine = self.canv.line
+        if count == 1:
+            for y in rp:
+                _hLine(canvLine, scp, ecp, y, hBlocks)
+        else:
+            lf = lambda x0,y0,x1,y1,canvLine=canvLine, ws=weight+space, count=count: _multiLine(x0,x1,y0,canvLine,ws,count)
+            for y in rp:
+                _hLine(lf, scp, ecp, y, hBlocks)
+
+    def _drawHLinesB(self, start, end, weight, color, count, space):
+        sc,sr = start
+        ec,er = end
+        self._drawHLines((sc, sr+1), (ec, er+1), weight, color, count, space)
+
+    def _drawVLines(self, start, end, weight, color, count, space):
+        sc,sr = start
+        ec,er = end
+        erp = self._rowpositions[sr:er+2]
+        cp  = self._colpositions[sc:ec+1]
+        if len(erp)<=1 or len(cp)<1: return
+        self._prepLine(weight, color)
+        srp = erp[0]
+        erp = erp[-1]
+        vBlocks = getattr(self,'_vBlocks',{})
+        canvLine = lambda y0, x0, y1, x1, _line=self.canv.line: _line(x0,y0,x1,y1)
+        if count == 1:
+            for x in cp:
+                _hLine(canvLine, erp, srp, x, vBlocks)
+        else:
+            lf = lambda x0,y0,x1,y1,canvLine=canvLine, ws=weight+space, count=count: _multiLine(x0,x1,y0,canvLine,ws,count)
+            for x in cp:
+                _hLine(lf, erp, srp, x, vBlocks)
+
+    def _drawVLinesA(self, start, end, weight, color, count, space):
+        sc,sr = start
+        ec,er = end
+        self._drawVLines((sc+1, sr), (ec+1, er), weight, color, count, space)
+
+    def wrap(self, availWidth, availHeight):
+        self._calc(availWidth, availHeight)
+        self.availWidth = availWidth
+        return (self._width, self._height)
+
+    def onSplit(self,T,byRow=1):
+        '''
+        This method will be called when the Table is split.
+        Special purpose tables can override to do special stuff.
+        '''
+        pass
+
+    def _cr_0(self,n,cmds,nr0):
+        for c in cmds:
+            c = tuple(c)
+            (sc,sr), (ec,er) = c[1:3]
+            if isinstance(sr,strTypes): continue
+            if sr<0: sr += nr0
+            if sr>=n: continue
+            if er>=n: er = n-1
+            self._addCommand((c[0],)+((sc, sr), (ec, er))+c[3:])
+
+    def _cr_1_1(self,n,repeatRows, cmds):
+        for c in cmds:
+            c = tuple(c)
+            (sc,sr), (ec,er) = c[1:3]
+            if sr in ('splitfirst','splitlast'): self._addCommand(c)
+            else:
+                if sr>=0 and sr>=repeatRows and sr<n and er>=0 and er<n: continue
+                if sr>=repeatRows and sr<n: sr=repeatRows
+                elif sr>=repeatRows and sr>=n: sr=sr+repeatRows-n
+                if er>=repeatRows and er<n: er=repeatRows
+                elif er>=repeatRows and er>=n: er=er+repeatRows-n
+                self._addCommand((c[0],)+((sc, sr), (ec, er))+c[3:])
+        sr = self._rowSplitRange
+        if sr:
+            sr, er = sr
+            if sr>=0 and sr>=repeatRows and sr<n and er>=0 and er<n:
+                self._rowSplitRange = None
+            else:
+                if sr>=repeatRows and sr<n: sr=repeatRows
+                elif sr>=repeatRows and sr>=n: sr=sr+repeatRows-n
+                if er>=repeatRows and er<n: er=repeatRows
+                elif er>=repeatRows and er>=n: er=er+repeatRows-n
+                self._rowSplitRange = sr,er
+
+    def _cr_1_0(self,n,cmds):
+        for c in cmds:
+            c = tuple(c)
+            (sc,sr), (ec,er) = c[1:3]
+            if sr in ('splitfirst','splitlast'): self._addCommand(c)
+            else:
+                if er>=0 and er<n: continue
+                if sr>=0 and sr<n: sr=0
+                if sr>=n: sr -= n
+                if er>=n: er -= n
+                self._addCommand((c[0],)+((sc, sr), (ec, er))+c[3:])
+
+    def _splitRows(self,availHeight):
+        n=self._getFirstPossibleSplitRowPosition(availHeight)
+        repeatRows = self.repeatRows
+        if n<= (repeatRows if isinstance(repeatRows,int) else (max(repeatRows)+1)): return []
+        lim = len(self._rowHeights)
+        if n==lim: return [self]
+
+        lo = self._rowSplitRange
+        if lo:
+            lo, hi = lo
+            if lo<0: lo += lim
+            if hi<0: hi += lim
+            if n>hi:
+                return self._splitRows(availHeight - sum(self._rowHeights[hi:n]))
+            elif n<lo:
+                return []
+
+        repeatCols = self.repeatCols
+        splitByRow = self.splitByRow
+        data = self._cellvalues
+
+        #we're going to split into two superRows
+        ident = self.ident
+        if ident: ident = IdentStr(ident)
+        R0 = self.__class__( data[:n], colWidths=self._colWidths, rowHeights=self._argH[:n],
+                repeatRows=repeatRows, repeatCols=repeatCols,
+                splitByRow=splitByRow, normalizedData=1, cellStyles=self._cellStyles[:n],
+                ident=ident,
+                spaceBefore=getattr(self,'spaceBefore',None))
+
+        nrows = self._nrows
+        ncols = self._ncols
+        #copy the commands
+        A = []
+        # hack up the line commands
+        for op, (sc,sr), (ec,er), weight, color, cap, dash, join, count, space in self._linecmds:
+            if isinstance(sr,strTypes) and sr.startswith('split'):
+                A.append((op,(sc,sr), (ec,sr), weight, color, cap, dash, join, count, space))
+                if sr=='splitlast':
+                    sr = er = n-1
+                elif sr=='splitfirst':
+                    sr = n
+                    er = n
+
+            if sc < 0: sc += ncols
+            if ec < 0: ec += ncols
+            if sr < 0: sr += nrows
+            if er < 0: er += nrows
+
+            if op in ('BOX','OUTLINE','GRID'):
+                if sr<n and er>=n:
+                    # we have to split the BOX
+                    A.append(('LINEABOVE',(sc,sr), (ec,sr), weight, color, cap, dash, join, count, space))
+                    A.append(('LINEBEFORE',(sc,sr), (sc,er), weight, color, cap, dash, join, count, space))
+                    A.append(('LINEAFTER',(ec,sr), (ec,er), weight, color, cap, dash, join, count, space))
+                    A.append(('LINEBELOW',(sc,er), (ec,er), weight, color, cap, dash, join, count, space))
+                    if op=='GRID':
+                        A.append(('LINEBELOW',(sc,n-1), (ec,n-1), weight, color, cap, dash, join, count, space))
+                        A.append(('LINEABOVE',(sc,n), (ec,n), weight, color, cap, dash, join, count, space))
+                        A.append(('INNERGRID',(sc,sr), (ec,er), weight, color, cap, dash, join, count, space))
+                else:
+                    A.append((op,(sc,sr), (ec,er), weight, color, cap, dash, join, count, space))
+            elif op in ('INNERGRID','LINEABOVE'):
+                if sr<n and er>=n:
+                    A.append(('LINEBELOW',(sc,n-1), (ec,n-1), weight, color, cap, dash, join, count, space))
+                    A.append(('LINEABOVE',(sc,n), (ec,n), weight, color, cap, dash, join, count, space))
+                A.append((op,(sc,sr), (ec,er), weight, color, cap, dash, join, count, space))
+            elif op == 'LINEBELOW':
+                if sr<n and er>=(n-1):
+                    A.append(('LINEABOVE',(sc,n), (ec,n), weight, color, cap, dash, join, count, space))
+                A.append((op,(sc,sr), (ec,er), weight, color))
+            elif op == 'LINEABOVE':
+                if sr<=n and er>=n:
+                    A.append(('LINEBELOW',(sc,n-1), (ec,n-1), weight, color, cap, dash, join, count, space))
+                A.append((op,(sc,sr), (ec,er), weight, color, cap, dash, join, count, space))
+            else:
+                A.append((op,(sc,sr), (ec,er), weight, color, cap, dash, join, count, space))
+
+        R0._cr_0(n,A,nrows)
+        R0._cr_0(n,self._bkgrndcmds,nrows)
+        R0._cr_0(n,self._spanCmds,nrows)
+        R0._cr_0(n,self._nosplitCmds,nrows)
+
+        if ident: ident = IdentStr(ident)
+        if repeatRows:
+            if isinstance(repeatRows,int):
+                iRows = data[:repeatRows]
+                nRepeatRows = repeatRows
+                iRowH = self._argH[:repeatRows]
+                iCS = self._cellStyles[:repeatRows]
+            else:
+                #we have a list of repeated rows eg (1,3)
+                repeatRows = list(sorted(repeatRows))
+                iRows = [data[i] for i in repeatRows]
+                nRepeatRows = len(repeatRows)
+                iRowH = [self._argH[i] for i in repeatRows]
+                iCS = [self._cellStyles[i] for i in repeatRows]
+            R1 = self.__class__(iRows+data[n:],colWidths=self._colWidths,
+                    rowHeights=iRowH+self._argH[n:],
+                    repeatRows=nRepeatRows, repeatCols=repeatCols,
+                    splitByRow=splitByRow, normalizedData=1,
+                    cellStyles=iCS+self._cellStyles[n:],
+                    ident=ident,
+                    spaceAfter=getattr(self,'spaceAfter',None),
+                    )
+            R1._cr_1_1(n,nRepeatRows,A)
+            R1._cr_1_1(n,nRepeatRows,self._bkgrndcmds)
+            R1._cr_1_1(n,nRepeatRows,self._spanCmds)
+            R1._cr_1_1(n,nRepeatRows,self._nosplitCmds)
+        else:
+            #R1 = slelf.__class__(data[n:], self._argW, self._argH[n:],
+            R1 = self.__class__(data[n:], colWidths=self._colWidths, rowHeights=self._argH[n:],
+                    repeatRows=repeatRows, repeatCols=repeatCols,
+                    splitByRow=splitByRow, normalizedData=1, cellStyles=self._cellStyles[n:],
+                    ident=ident,
+                    spaceAfter=getattr(self,'spaceAfter',None),
+                    )
+            R1._cr_1_0(n,A)
+            R1._cr_1_0(n,self._bkgrndcmds)
+            R1._cr_1_0(n,self._spanCmds)
+            R1._cr_1_0(n,self._nosplitCmds)
+
+        R0.hAlign = R1.hAlign = self.hAlign
+        R0.vAlign = R1.vAlign = self.vAlign
+        self.onSplit(R0)
+        self.onSplit(R1)
+        return [R0,R1]
+
+    def _getRowImpossible(impossible,cells,ranges):
+        for xy in cells:
+            r=ranges[xy]
+            if r!=None:
+                y1,y2=r[1],r[3]
+                if y1!=y2:
+                    ymin=min(y1,y2) #normalize
+                    ymax=max(y1,y2) #normalize
+                    y=ymin+1
+                    while 1:
+                        if y>ymax: break
+                        impossible[y]=None #split at position y is impossible because of overlapping rowspan
+                        y+=1
+    _getRowImpossible=staticmethod(_getRowImpossible)
+
+    def _getFirstPossibleSplitRowPosition(self,availHeight):
+        impossible={}
+        if self._spanCmds:
+            self._getRowImpossible(impossible,self._rowSpanCells,self._spanRanges)
+        if self._nosplitCmds:
+            self._getRowImpossible(impossible,self._rowNoSplitCells,self._nosplitRanges)
+        h = 0
+        n = 1
+        split_at = 0 # from this point of view 0 is the first position where the table may *always* be splitted
+        for rh in self._rowHeights:
+            if h+rh>availHeight:
+                break
+            if n not in impossible:
+                split_at=n
+            h=h+rh
+            n=n+1
+        return split_at
+
+    def split(self, availWidth, availHeight):
+        self._calc(availWidth, availHeight)
+        if self.splitByRow:
+            if not rl_config.allowTableBoundsErrors and self._width>availWidth: return []
+            return self._splitRows(availHeight)
+        else:
+            raise NotImplementedError
+
+    def draw(self):
+        self._curweight = self._curcolor = self._curcellstyle = None
+        self._drawBkgrnd()
+        if not self._spanCmds:
+            # old fashioned case, no spanning, steam on and do each cell
+            for row, rowstyle, rowpos, rowheight in zip(self._cellvalues, self._cellStyles, self._rowpositions[1:], self._rowHeights):
+                for cellval, cellstyle, colpos, colwidth in zip(row, rowstyle, self._colpositions[:-1], self._colWidths):
+                    self._drawCell(cellval, cellstyle, (colpos, rowpos), (colwidth, rowheight))
+        else:
+            # we have some row or col spans, need a more complex algorithm
+            # to find the rect for each
+            for rowNo in xrange(self._nrows):
+                for colNo in xrange(self._ncols):
+                    cellRect = self._spanRects[colNo, rowNo]
+                    if cellRect is not None:
+                        (x, y, width, height) = cellRect
+                        cellval = self._cellvalues[rowNo][colNo]
+                        cellstyle = self._cellStyles[rowNo][colNo]
+                        self._drawCell(cellval, cellstyle, (x, y), (width, height))
+        self._drawLines()
+
+    def _drawBkgrnd(self):
+        nrows = self._nrows
+        ncols = self._ncols
+        canv = self.canv
+        colpositions = self._colpositions
+        rowpositions = self._rowpositions
+        rowHeights = self._rowHeights
+        colWidths = self._colWidths
+        spanRects = getattr(self,'_spanRects',None)
+        for cmd, (sc, sr), (ec, er), arg in self._bkgrndcmds:
+            if sc < 0: sc = sc + ncols
+            if ec < 0: ec = ec + ncols
+            if sr < 0: sr = sr + nrows
+            if er < 0: er = er + nrows
+            x0 = colpositions[sc]
+            y0 = rowpositions[sr]
+            x1 = colpositions[min(ec+1,ncols)]
+            y1 = rowpositions[min(er+1,nrows)]
+            w, h = x1-x0, y1-y0
+            if hasattr(arg,'__call__'):
+                arg(self,canv, x0, y0, w, h)
+            elif cmd == 'ROWBACKGROUNDS':
+                #Need a list of colors to cycle through.  The arguments
+                #might be already colours, or convertible to colors, or
+                # None, or the str 'None'.
+                #It's very common to alternate a pale shade with None.
+                colorCycle = list(map(colors.toColorOrNone, arg))
+                count = len(colorCycle)
+                rowCount = er - sr + 1
+                for i in xrange(rowCount):
+                    color = colorCycle[i%count]
+                    h = rowHeights[sr + i]
+                    if color:
+                        canv.setFillColor(color)
+                        canv.rect(x0, y0, w, -h, stroke=0,fill=1)
+                    y0 = y0 - h
+            elif cmd == 'COLBACKGROUNDS':
+                #cycle through colours columnwise
+                colorCycle = list(map(colors.toColorOrNone, arg))
+                count = len(colorCycle)
+                colCount = ec - sc + 1
+                for i in xrange(colCount):
+                    color = colorCycle[i%count]
+                    w = colWidths[sc + i]
+                    if color:
+                        canv.setFillColor(color)
+                        canv.rect(x0, y0, w, h, stroke=0,fill=1)
+                    x0 = x0 +w
+            else:   #cmd=='BACKGROUND'
+                color = colors.toColorOrNone(arg)
+                if color:
+                    if ec==sc and er==sr and spanRects:
+                        xywh = spanRects.get((sc,sr))
+                        if xywh:
+                            #it's a single cell
+                            x0, y0, w, h = xywh
+                    canv.setFillColor(color)
+                    canv.rect(x0, y0, w, h, stroke=0,fill=1)
+
+    def _drawCell(self, cellval, cellstyle, pos, size):
+        colpos, rowpos = pos
+        colwidth, rowheight = size
+        if self._curcellstyle is not cellstyle:
+            cur = self._curcellstyle
+            if cur is None or cellstyle.color != cur.color:
+                self.canv.setFillColor(cellstyle.color)
+            if cur is None or cellstyle.leading != cur.leading or cellstyle.fontname != cur.fontname or cellstyle.fontsize != cur.fontsize:
+                self.canv.setFont(cellstyle.fontname, cellstyle.fontsize, cellstyle.leading)
+            self._curcellstyle = cellstyle
+
+        just = cellstyle.alignment
+        valign = cellstyle.valign
+        if isinstance(cellval,(tuple,list,Flowable)):
+            if not isinstance(cellval,(tuple,list)): cellval = (cellval,)
+            # we assume it's a list of Flowables
+            W = []
+            H = []
+            w, h = self._listCellGeom(cellval,colwidth,cellstyle,W=W, H=H,aH=rowheight)
+            if valign=='TOP':
+                y = rowpos + rowheight - cellstyle.topPadding
+            elif valign=='BOTTOM':
+                y = rowpos+cellstyle.bottomPadding + h
+            else:
+                y = rowpos+(rowheight+cellstyle.bottomPadding-cellstyle.topPadding+h)/2.0
+            if cellval: y += cellval[0].getSpaceBefore()
+            for v, w, h in zip(cellval,W,H):
+                if just=='LEFT': x = colpos+cellstyle.leftPadding
+                elif just=='RIGHT': x = colpos+colwidth-cellstyle.rightPadding - w
+                elif just in ('CENTRE', 'CENTER'):
+                    x = colpos+(colwidth+cellstyle.leftPadding-cellstyle.rightPadding-w)/2.0
+                else:
+                    raise ValueError('Invalid justification %s' % just)
+                y -= v.getSpaceBefore()
+                y -= h
+                v.drawOn(self.canv,x,y)
+                y -= v.getSpaceAfter()
+        else:
+            if just == 'LEFT':
+                draw = self.canv.drawString
+                x = colpos + cellstyle.leftPadding
+            elif just in ('CENTRE', 'CENTER'):
+                draw = self.canv.drawCentredString
+                x = colpos+(colwidth+cellstyle.leftPadding-cellstyle.rightPadding)*0.5
+            elif just == 'RIGHT':
+                draw = self.canv.drawRightString
+                x = colpos + colwidth - cellstyle.rightPadding
+            elif just == 'DECIMAL':
+                draw = self.canv.drawAlignedString
+                x = colpos + colwidth - cellstyle.rightPadding
+            else:
+                raise ValueError('Invalid justification %s' % just)
+            vals = str(cellval).split("\n")
+            n = len(vals)
+            leading = cellstyle.leading
+            fontsize = cellstyle.fontsize
+            if valign=='BOTTOM':
+                y = rowpos + cellstyle.bottomPadding+n*leading-fontsize
+            elif valign=='TOP':
+                y = rowpos + rowheight - cellstyle.topPadding - fontsize
+            elif valign=='MIDDLE':
+                #tim roberts pointed out missing fontsize correction 2004-10-04
+                y = rowpos + (cellstyle.bottomPadding + rowheight-cellstyle.topPadding+n*leading)/2.0 - fontsize
+            else:
+                raise ValueError("Bad valign: '%s'" % str(valign))
+
+            for v in vals:
+                draw(x, y, v)
+                y -= leading
+            onDraw = getattr(cellval,'onDraw',None)
+            if onDraw:
+                onDraw(self.canv,cellval.kind,cellval.label)
+
+        if cellstyle.href:
+            #external hyperlink
+            self.canv.linkURL(cellstyle.href, (colpos, rowpos, colpos + colwidth, rowpos + rowheight), relative=1)
+        if cellstyle.destination:
+            #external hyperlink
+            self.canv.linkRect("", cellstyle.destination, Rect=(colpos, rowpos, colpos + colwidth, rowpos + rowheight), relative=1)
+
+_LineOpMap = {  'GRID':'_drawGrid',
+                'BOX':'_drawBox',
+                'OUTLINE':'_drawBox',
+                'INNERGRID':'_drawInnerGrid',
+                'LINEBELOW':'_drawHLinesB',
+                'LINEABOVE':'_drawHLines',
+                'LINEBEFORE':'_drawVLines',
+                'LINEAFTER':'_drawVLinesA', }
+
+class LongTable(Table):
+    '''Henning von Bargen's changes will be active'''
+    _longTableOptimize = 1
+
+LINECOMMANDS = list(_LineOpMap.keys())
+
+def _isLineCommand(cmd):
+    return cmd[0] in LINECOMMANDS
+
+def _setCellStyle(cellStyles, i, j, op, values):
+    #new = CellStyle('<%d, %d>' % (i,j), cellStyles[i][j])
+    #cellStyles[i][j] = new
+    ## modify in place!!!
+    new = cellStyles[i][j]
+    if op == 'FONT':
+        n = len(values)
+        new.fontname = values[0]
+        if n>1:
+            new.fontsize = values[1]
+            if n>2:
+                new.leading = values[2]
+            else:
+                new.leading = new.fontsize*1.2
+    elif op in ('FONTNAME', 'FACE'):
+        new.fontname = values[0]
+    elif op in ('SIZE', 'FONTSIZE'):
+        new.fontsize = values[0]
+    elif op == 'LEADING':
+        new.leading = values[0]
+    elif op == 'TEXTCOLOR':
+        new.color = colors.toColor(values[0], colors.Color(0,0,0))
+    elif op in ('ALIGN', 'ALIGNMENT'):
+        new.alignment = values[0]
+    elif op == 'VALIGN':
+        new.valign = values[0]
+    elif op == 'LEFTPADDING':
+        new.leftPadding = values[0]
+    elif op == 'RIGHTPADDING':
+        new.rightPadding = values[0]
+    elif op == 'TOPPADDING':
+        new.topPadding = values[0]
+    elif op == 'BOTTOMPADDING':
+        new.bottomPadding = values[0]
+    elif op == 'HREF':
+        new.href = values[0]
+    elif op == 'DESTINATION':
+        new.destination = values[0]
+
+GRID_STYLE = TableStyle(
+    [('GRID', (0,0), (-1,-1), 0.25, colors.black),
+     ('ALIGN', (1,1), (-1,-1), 'RIGHT')]
+    )
+BOX_STYLE = TableStyle(
+    [('BOX', (0,0), (-1,-1), 0.50, colors.black),
+     ('ALIGN', (1,1), (-1,-1), 'RIGHT')]
+    )
+LABELED_GRID_STYLE = TableStyle(
+    [('INNERGRID', (0,0), (-1,-1), 0.25, colors.black),
+     ('BOX', (0,0), (-1,-1), 2, colors.black),
+     ('LINEBELOW', (0,0), (-1,0), 2, colors.black),
+     ('LINEAFTER', (0,0), (0,-1), 2, colors.black),
+     ('ALIGN', (1,1), (-1,-1), 'RIGHT')]
+    )
+COLORED_GRID_STYLE = TableStyle(
+    [('INNERGRID', (0,0), (-1,-1), 0.25, colors.black),
+     ('BOX', (0,0), (-1,-1), 2, colors.red),
+     ('LINEBELOW', (0,0), (-1,0), 2, colors.black),
+     ('LINEAFTER', (0,0), (0,-1), 2, colors.black),
+     ('ALIGN', (1,1), (-1,-1), 'RIGHT')]
+    )
+LIST_STYLE = TableStyle(
+    [('LINEABOVE', (0,0), (-1,0), 2, colors.green),
+     ('LINEABOVE', (0,1), (-1,-1), 0.25, colors.black),
+     ('LINEBELOW', (0,-1), (-1,-1), 2, colors.green),
+     ('ALIGN', (1,1), (-1,-1), 'RIGHT')]
+    )
+
+# experimental iterator which can apply a sequence
+# of colors e.g. Blue, None, Blue, None as you move
+# down.
+if __name__ == '__main__':
+    from tests.test_platypus_tables import old_tables_test
+    old_tables_test()
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           '''
+Debian and other distributions "unbundle" requests' vendored dependencies, and
+rewrite all imports to use the global versions of ``urllib3`` and ``chardet``.
+The problem with this is that not only requests itself imports those
+dependencies, but third-party code outside of the distros' control too.
+
+In reaction to these problems, the distro maintainers replaced
+``requests.packages`` with a magical "stub module" that imports the correct
+modules. The implementations were varying in quality and all had severe
+problems. For example, a symlink (or hardlink) that links the correct modules
+into place introduces problems regarding object identity, since you now have
+two modules in `sys.modules` with the same API, but different identities::
+
+    requests.packages.urllib3 is not urllib3
+
+With version ``2.5.2``, requests started to maintain its own stub, so that
+distro-specific breakage would be reduced to a minimum, even though the whole
+issue is not requests' fault in the first place. See
+https://github.com/kennethreitz/requests/pull/2375 for the corresponding pull
+request.
+'''
+
+from __future__ import absolute_import
+import sys
+
+try:
+    from . import urllib3
+except ImportError:
+    import urllib3
+    sys.modules['%s.urllib3' % __name__] = urllib3
+
+try:
+    from . import chardet
+except ImportError:
+    import chardet
+    sys.modules['%s.chardet' % __name__] = chardet
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        #Copyright ReportLab Europe Ltd. 2000-2016
+#see license.txt for license details
+#history http://www.reportlab.co.uk/cgi-bin/viewcvs.cgi/public/reportlab/trunk/reportlab/platypus/xpreformatted.py
+__version__='3.3.0'
+__doc__='''A 'rich preformatted text' widget allowing internal markup'''
+from reportlab.lib import PyFontify
+from reportlab.platypus.paragraph import Paragraph, cleanBlockQuotedText, _handleBulletWidth, \
+     ParaLines, _getFragWords, stringWidth, getAscentDescent, imgVRange, imgNormV
+from reportlab.lib.utils import isSeq
+from reportlab.platypus.flowables import _dedenter
+
+def _getFragLines(frags):
+    lines = []
+    cline = []
+    W = frags[:]
+    while W != []:
+        w = W[0]
+        t = w.text
+        del W[0]
+        i = t.find('\n')
+        if i>=0:
+            tleft = t[i+1:]
+            cline.append(w.clone(text=t[:i]))
+            lines.append(cline)
+            cline = []
+            if tleft!='':
+                W.insert(0,w.clone(text=tleft))
+        else:
+            cline.append(w)
+    if cline!=[]:
+        lines.append(cline)
+    return lines
+
+def _split_blPara(blPara,start,stop):
+    f = blPara.clone()
+    for a in ('lines', 'text'):
+        if hasattr(f,a): delattr(f,a)
+    f.lines = blPara.lines[start:stop]
+    return [f]
+
+# Will be removed shortly.
+def _countSpaces(text):
+    return text.count(' ')
+##  i = 0
+##  s = 0
+##  while 1:
+##      j = text.find(' ',i)
+##      if j<0: return s
+##      s = s + 1
+##      i = j + 1
+
+def _getFragWord(frags,maxWidth):
+    ''' given a fragment list return a list of lists
+        [size, spaces, (f00,w00), ..., (f0n,w0n)]
+        each pair f,w represents a style and some string
+    '''
+    W = []
+    n = 0
+    s = 0
+    for f in frags:
+        text = f.text[:]
+        W.append((f,text))
+        cb = getattr(f,'cbDefn',None)
+        if cb:
+            _w = getattr(cb,'width',0)
+            if hasattr(_w,'normalizedValue'):
+                _w._normalizer = maxWidth
+        n = n + stringWidth(text, f.fontName, f.fontSize)
+
+        #s = s + _countSpaces(text)
+        s = s + text.count(' ') # much faster for many blanks
+
+        #del f.text # we can't do this until we sort out splitting
+                    # of paragraphs
+    return n, s, W
+
+class XPreformatted(Paragraph):
+    def __init__(self, text, style, bulletText = None, frags=None, caseSensitive=1, dedent=0):
+        self.caseSensitive = caseSensitive
+        cleaner = lambda text, dedent=dedent: '\n'.join(_dedenter(text or '',dedent))
+        self._setup(text, style, bulletText, frags, cleaner)
+
+    def breakLines(self, width):
+        """
+        Returns a broken line structure. There are two cases
+
+        A) For the simple case of a single formatting input fragment the output is
+            A fragment specifier with
+                - kind = 0
+                - fontName, fontSize, leading, textColor
+                - lines=  A list of lines
+                
+                    Each line has two items:
+                    
+                    1. unused width in points
+                    2. a list of words
+
+        B) When there is more than one input formatting fragment the out put is
+            A fragment specifier with
+                - kind = 1
+                - lines =  A list of fragments each having fields:
+                
+                    - extraspace (needed for justified)
+                    - fontSize
+                    - words=word list
+                    - each word is itself a fragment with
+                    - various settings
+
+        This structure can be used to easily draw paragraphs with the various alignments.
+        You can supply either a single width or a list of widths; the latter will have its
+        last item repeated until necessary. A 2-element list is useful when there is a
+        different first line indent; a longer list could be created to facilitate custom wraps
+        around irregular objects."""
+
+        if not isSeq(width): maxWidths = [width]
+        else: maxWidths = width
+        lines = []
+        lineno = 0
+        maxWidth = maxWidths[lineno]
+        style = self.style
+        fFontSize = float(style.fontSize)
+        requiredWidth = 0
+
+        #for bullets, work out width and ensure we wrap the right amount onto line one
+        _handleBulletWidth(self.bulletText,style,maxWidths)
+
+        self.height = 0
+        autoLeading = getattr(self,'autoLeading',getattr(style,'autoLeading',''))
+        calcBounds = autoLeading not in ('','off')
+        frags = self.frags
+        nFrags= len(frags)
+        if nFrags==1:
+            f = frags[0]
+            if hasattr(f,'text'):
+                fontSize = f.fontSize
+                fontName = f.fontName
+                ascent, descent = getAscentDescent(fontName,fontSize)
+                kind = 0
+                L=f.text.split('\n')
+                for l in L:
+                    currentWidth = stringWidth(l,fontName,fontSize)
+                    requiredWidth = max(currentWidth,requiredWidth)
+                    extraSpace = maxWidth-currentWidth
+                    lines.append((extraSpace,l.split(' '),currentWidth))
+                    lineno = lineno+1
+                    maxWidth = lineno<len(maxWidths) and maxWidths[lineno] or maxWidths[-1]
+                blPara = f.clone(kind=kind, lines=lines,ascent=ascent,descent=descent,fontSize=fontSize)
+            else:
+                kind = f.kind
+                lines = f.lines
+                for L in lines:
+                    if kind==0:
+                        currentWidth = L[2]
+                    else:
+                        currentWidth = L.currentWidth
+                    requiredWidth = max(currentWidth,requiredWidth)
+                blPara = f.clone(kind=kind, lines=lines)
+
+            self.width = max(self.width,requiredWidth)
+            return blPara
+        elif nFrags<=0:
+            return ParaLines(kind=0, fontSize=style.fontSize, fontName=style.fontName,
+                            textColor=style.textColor, ascent=style.fontSize,descent=-0.2*style.fontSize,
+                            lines=[])
+        else:
+            for L in _getFragLines(frags):
+                currentWidth, n, w = _getFragWord(L,maxWidth)
+                f = w[0][0]
+                maxSize = f.fontSize
+                maxAscent, minDescent = getAscentDescent(f.fontName,maxSize)
+                words = [f.clone()]
+                words[-1].text = w[0][1]
+                for i in w[1:]:
+                    f = i[0].clone()
+                    f.text=i[1]
+                    words.append(f)
+                    fontSize = f.fontSize
+                    fontName = f.fontName
+                    if calcBounds:
+                        cbDefn = getattr(f,'cbDefn',None)
+                        if getattr(cbDefn,'width',0):
+                            descent,ascent = imgVRange(imgNormV(cbDefn.height,fontSize),cbDefn.valign,fontSize)
+                        else:
+                            ascent, descent = getAscentDescent(fontName,fontSize)
+                    else:
+                        ascent, descent = getAscentDescent(fontName,fontSize)
+                    maxSize = max(maxSize,fontSize)
+                    maxAscent = max(maxAscent,ascent)
+                    minDescent = min(minDescent,descent)
+
+                lineno += 1
+                maxWidth = lineno<len(maxWidths) and maxWidths[lineno] or maxWidths[-1]
+                requiredWidth = max(currentWidth,requiredWidth)
+                extraSpace = maxWidth - currentWidth
+                lines.append(ParaLines(extraSpace=extraSpace,wordCount=n, words=words, fontSize=maxSize, ascent=maxAscent,descent=minDescent,currentWidth=currentWidth))
+
+            self.width = max(self.width,requiredWidth)
+            return ParaLines(kind=1, lines=lines)
+
+        return lines
+
+    breakLinesCJK = breakLines  #TODO fixme fixme fixme
+
+    # we need this her to get the right splitter
+    def _get_split_blParaFunc(self):
+        return _split_blPara
+
+class PythonPreformatted(XPreformatted):
+    """Used for syntax-colored Python code, otherwise like XPreformatted.
+    """
+    formats = {
+        'rest'       : ('', ''),
+        'comment'    : ('<font color="green">', '</font>'),
+        'keyword'    : ('<font color="blue"><b>', '</b></font>'),
+        'parameter'  : ('<font color="black">', '</font>'),
+        'identifier' : ('<font color="red">', '</font>'),
+        'string'     : ('<font color="gray">', '</font>') }
+
+    def __init__(self, text, style, bulletText = None, dedent=0, frags=None):
+        if text:
+            text = self.fontify(self.escapeHtml(text))
+        XPreformatted.__init__(self, text, style,bulletText=bulletText,dedent=dedent,frags=frags)
+
+    def escapeHtml(self, text):
+        s = text.replace('&', '&amp;')
+        s = s.replace('<', '&lt;')
+        s = s.replace('>', '&gt;')
+        return s
+
+    def fontify(self, code):
+        "Return a fontified version of some Python code."
+
+        if code[0] == '\n':
+            code = code[1:]
+
+        tags = PyFontify.fontify(code)
+        fontifiedCode = ''
+        pos = 0
+        for k, i, j, dummy in tags:
+            fontifiedCode = fontifiedCode + code[pos:i]
+            s, e = self.formats[k]
+            fontifiedCode = fontifiedCode + s + code[i:j] + e
+            pos = j
+
+        fontifiedCode = fontifiedCode + code[pos:]
+
+        return fontifiedCode
+
+if __name__=='__main__':    #NORUNTESTS
+    import sys
+    def dumpXPreformattedLines(P):
+        print('\n############dumpXPreforemattedLines(%s)' % str(P))
+        lines = P.blPara.lines
+        n =len(lines)
+        outw=sys.stdout.write
+        for l in range(n):
+            line = lines[l]
+            words = line.words
+            nwords = len(words)
+            outw('line%d: %d(%d)\n  ' % (l,nwords,line.wordCount))
+            for w in range(nwords):
+                outw(" %d:'%s'"%(w,words[w].text))
+            print()
+
+    def dumpXPreformattedFrags(P):
+        print('\n############dumpXPreforemattedFrags(%s)' % str(P))
+        frags = P.frags
+        n =len(frags)
+        for l in range(n):
+            print("frag%d: '%s'" % (l, frags[l].text))
+
+        outw=sys.stdout.write
+        l = 0
+        for L in _getFragLines(frags):
+            n=0
+            for W in _getFragWords(L,360):
+                outw("frag%d.%d: size=%d" % (l, n, W[0]))
+                n = n + 1
+                for w in W[1:]:
+                    outw(" '%s'" % w[1])
+                print()
+            l = l + 1
+
+    def try_it(text,style,dedent,aW,aH):
+        P=XPreformatted(text,style,dedent=dedent)
+        dumpXPreformattedFrags(P)
+        w,h = P.wrap(aW, aH)
+        dumpXPreformattedLines(P)
+        S = P.split(aW,aH)
+        dumpXPreformattedLines(P)
+        for s in S:
+            s.wrap(aW,aH)
+            dumpXPreformattedLines(s)
+            aH = 500
+
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    styleSheet = getSampleStyleSheet()
+    B = styleSheet['BodyText']
+    DTstyle = ParagraphStyle("discussiontext", parent=B)
+    DTstyle.fontName= 'Helvetica'
+    for (text,dedent,style, aW, aH, active) in [('''
+
+
+The <font name=courier color=green>CMYK</font> or subtractive
+
+method follows the way a printer
+mixes three pigments (cyan, magenta, and yellow) to form colors.
+Because mixing chemicals is more difficult than combining light there
+is a fourth parameter for darkness.  For example a chemical
+combination of the <font name=courier color=green>CMY</font> pigments generally never makes a perfect
+
+black -- instead producing a muddy color -- so, to get black printers
+don't use the <font name=courier color=green>CMY</font> pigments but use a direct black ink.  Because
+<font name=courier color=green>CMYK</font> maps more directly to the way printer hardware works it may
+be the case that &amp;| &amp; | colors specified in <font name=courier color=green>CMYK</font> will provide better fidelity
+and better control when printed.
+
+
+''',0,DTstyle, 456.0, 42.8, 0),
+('''
+
+   This is a non rearranging form of the <b>Paragraph</b> class;
+   <b><font color=red>XML</font></b> tags are allowed in <i>text</i> and have the same
+
+      meanings as for the <b>Paragraph</b> class.
+   As for <b>Preformatted</b>, if dedent is non zero <font color=red size=+1>dedent</font>
+       common leading spaces will be removed from the
+   front of each line.
+
+''',3, DTstyle, 456.0, 42.8, 0),
+("""\
+    <font color=blue>class </font><font color=red>FastXMLParser</font>:
+        # Nonsense method
+        def nonsense(self):
+            self.foo = 'bar'
+""",0, styleSheet['Code'], 456.0, 4.8, 1),
+]:
+        if active: try_it(text,style,dedent,aW,aH)
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    # -*- coding: utf-8 -*-
+"""
+Provides an aptdaemon based backend
+"""
+# Copyright (C) 2008-2010 Sebastian Heinlein <devel@glatzor.de>
+#
+# Licensed under the GNU General Public License Version 2
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+
+__author__ = "Sebastian Heinlein <devel@glatzor.de>"
+
+from gi.repository import Gtk
+
+from aptdaemon import enums
+import defer
+import aptdaemon.client
+import aptdaemon.errors
+import aptdaemon.gtk3widgets
+
+import sessioninstaller.errors
+
+
+class AptDaemonBackend(object):
+
+    """Provides a graphical test application."""
+
+    def __init__(self):
+        self.ac = aptdaemon.client.AptClient()
+
+    def _run_trans(self, trans, parent, interaction):
+        deferred = defer.Deferred()
+        dia = aptdaemon.gtk3widgets.AptProgressDialog(trans)
+        if parent:
+            dia.realize()
+            dia.set_transient_for(parent)
+        dia.run(close_on_finished=True, show_error=False,
+                reply_handler=lambda: True,
+                error_handler=deferred.errback)
+        dia.connect("finished", self._on_finished, deferred, trans)
+        return deferred
+
+    def _on_finished(self, diag, deferred, trans):
+        if deferred.called:
+            return  # Already called, likely from error_handler (LP: #1056545)
+        if trans.error:
+            deferred.errback(trans.error)
+        else:
+            deferred.callback()
+
+    def _simulate_trans(self, trans, parent, interaction):
+        deferred = defer.Deferred()
+        trans.simulate(reply_handler=lambda: deferred.callback(trans),
+                       error_handler=deferred.errback)
+        return deferred
+
+    def _confirm_deps(self, trans, parent, interaction):
+        if not [pkgs for pkgs in trans.dependencies if pkgs]:
+            return trans
+        dia = aptdaemon.gtk3widgets.AptConfirmDialog(trans)
+        if parent:
+            dia.realize()
+            dia.set_transient_for(parent)
+        res = dia.run()
+        dia.hide()
+        if res == Gtk.ResponseType.OK:
+            return trans
+        raise sessioninstaller.errors.ModifyCancelled
+
+    def install_packages(self, xid, package_names, interaction):
+        deferred = defer.Deferred()
+        parent = None # should get from XID, but removed from Gdk 3
+        self.ac.install_packages(package_names, reply_handler=deferred.callback,
+                                 error_handler=deferred.errback)
+        deferred.add_callback(self._simulate_trans, parent, interaction)
+        deferred.add_callback(self._confirm_deps, parent, interaction)
+        deferred.add_callback(self._run_trans, parent, interaction)
+        deferred.add_errback(self._show_error, parent)
+        return deferred
+
+    def install_package_files(self, xid, files, interaction):
+        deferred = defer.Deferred()
+        parent = None # should get from XID, but removed from Gdk 3
+        #FIXME: Add support for installing serveral files at the same time
+        self.ac.install_file(files[0], reply_handler=deferred.callback,
+                             error_handler=deferred.errback)
+        deferred.add_callback(self._simulate_trans, parent, interaction)
+        deferred.add_callback(self._confirm_deps, parent, interaction)
+        deferred.add_callback(self._run_trans, parent, interaction)
+        deferred.add_errback(self._show_error, parent)
+        return deferred
+
+    def remove_packages(self, xid, package_names, interaction):
+        deferred = defer.Deferred()
+        parent = None # should get from XID, but removed from Gdk 3
+        self.ac.remove_packages(package_names, reply_handler=deferred.callback,
+                                error_handler=deferred.errback)
+        deferred.add_callback(self._simulate_trans, parent, interaction)
+        deferred.add_callback(self._confirm_deps, parent, interaction)
+        deferred.add_callback(self._run_trans, parent, interaction)
+        deferred.add_errback(self._show_error, parent)
+        return deferred
+
+    def _show_error(self, error, parent):
+        try:
+            error.raise_exception()
+        except aptdaemon.errors.NotAuthorizedError:
+            raise sessioninstaller.errors.ModifyForbidden
+        except aptdaemon.errors.TransactionCancelled:
+            raise sessioninstaller.errors.ModifyCancelled
+        except aptdaemon.errors.TransactionFailed as error:
+            pass
+        except sessioninstaller.errors.ModifyCancelled as error:
+            raise error
+        except Exception as error:
+            error = aptdaemon.errors.TransactionFailed(enums.ERROR_UNKNOWN,
+                                                       str(error))
+        dia = aptdaemon.gtk3widgets.AptErrorDialog(error)
+        if parent:
+            dia.realize()
+            dia.set_transient_for(parent)
+        dia.run()
+        dia.hide()
+        msg = "%s - %s\n%s" % (enums.get_error_string_from_enum(error.code),
+                              enums.get_error_description_from_enum(error.code),
+                              error.details)
+        raise sessioninstaller.errors.ModifyFailed(msg)
+
+
+# vim:ts=4:sw=4:et
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         # -*- coding: utf-8 -*-
+"""Provides a dummy backend."""
+# Copyright (C) 2008-2010 Sebastian Heinlein <devel@glatzor.de>
+#
+# Licensed under the GNU General Public License Version 2
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+
+__author__ = "Sebastian Heinlein <devel@glatzor.de>"
+
+from gettext import gettext as _
+
+from gi.repository import Gtk
+
+class DummyBackend(object):
+
+    """Provide some dummy dialogs which simulate package operations."""
+
+    def _show_message(self, title, text):
+        dia = Gtk.MessageDialog(buttons=Gtk.ButtonsType.CLOSE, message_format=title)
+        dia.format_secondary_text(text)
+        dia.run()
+        dia.hide()
+
+    def remove_packages(self, xid, package_names, interaction):
+        title = _("Removing packages")
+        text = _("The following packages will be removed with interaction "
+                 "mode %s: %s") % ( interaction, " ".join(package_names))
+        self._show_message(title, text)
+
+    def install_packages(self, xid, package_names, interaction):
+        title = _("Installing packages")
+        text = _("The following packages will be installed with interaction "
+                 "mode %s: %s") % (interaction, " ".join(package_names))
+        self._show_message(title, text)
+
+    def install_package_files(self, xid, package_names, interaction):
+        title = _("Installing package files")
+        text = _("The following package files will be installed with "
+                 "interaction mode %s: %s") % (interaction,
+                                               " ".join(package_names))
+        self._show_message(title, text)
+
+# vim:ts=4:sw=4:et
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       # -*- coding: utf-8 -*-
+"""Make use of synaptic as backend."""
+# Copyright (C) 2008-2010 Sebastian Heinlein <devel@glatzor.de>
+# Copyright (C) 2005-2007 Canonical
+#
+# Licensed under the GNU General Public License Version 2
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+
+__author__ = "Sebastian Heinlein <devel@glatzor.de>, " \
+             "Michael Vogt <mvo@canonical.com"
+
+import tempfile
+#from gettext import gettext as _
+
+from gi.repository import GObject
+
+from defer import Deferred
+
+import sessioninstaller.errors
+
+
+class SynapticBackend(object):
+
+    """Make use of Synaptic to install and remove packages."""
+
+    def _run_synaptic(self, xid, opt, tempf, interaction):
+        deferred = Deferred()
+        if tempf:
+            opt.extend(["--set-selections-file", "%s" % tempf.name])
+        #FIXME: Take interaction into account
+        opt.extend(["-o", "Synaptic::closeZvt=true"])
+        if xid:
+            opt.extend(["--parent-window-id", "%s" % (xid)])
+        cmd = ["/usr/bin/gksu", 
+               "--desktop", "/usr/share/applications/update-manager.desktop",
+               "--", "/usr/sbin/synaptic", "--hide-main-window",
+               "--non-interactive"]
+        cmd.extend(opt)
+        flags = GObject.SPAWN_DO_NOT_REAP_CHILD
+        (pid, stdin, stdout, stderr) = GObject.spawn_async(cmd, flags=flags)
+        GObject.child_watch_add(pid, self._on_synaptic_exit, (tempf, deferred))
+        return deferred
+
+    def _on_synaptic_exit(self, pid, condition, userdata):
+        (tempf, deferred) = userdata
+        if tempf:
+            tempf.close()
+        if condition == 0:
+            deferred.callback()
+        else:
+            deferred.errback(sessioninstaller.errors.ModifyFailed())
+
+    def remove_packages(self, xid, package_names, interaction):
+        opt = []
+        # custom progress strings
+        #opt.append("--progress-str")
+        #opt.append("%s" % _("Please wait, this can take some time."))
+        #opt.append("--finish-str")
+        #opt.append("%s" %  _("Update is complete"))
+        tempf = tempfile.NamedTemporaryFile()
+        for pkg_name in package_names:
+            tempf.write("%s\tuninstall\n" % pkg_name)
+        tempf.flush()
+        return self._run_synaptic(xid, opt, tempf, interaction)
+
+    def install_packages(self, xid, package_names, interaction):
+        opt = []
+        # custom progress strings
+        #opt.append("--progress-str")
+        #opt.append("%s" % _("Please wait, this can take some time."))
+        #opt.append("--finish-str")
+        #opt.append("%s" %  _("Update is complete"))
+        tempf = tempfile.NamedTemporaryFile()
+        for pkg_name in package_names:
+            tempf.write("%s\tinstall\n" % pkg_name)
+        tempf.flush()
+        return self._run_synaptic(xid, opt, tempf, interaction)
+
+    def install_package_files(self, xid, package_names, interaction):
+        raise NotImplemented
+
+
+# vim:ts=4:sw=4:et
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          # -*- coding: utf-8 -*-
+#
+# D-Bus based interface for software-properties
+#
+# Copyright © 2010 Harald Sitter <apachelogger@ubuntu.com>
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program; if not, write to the Free Software Foundation, Inc.,
+# 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+
+from gi.repository import GLib
+
+import dbus.service
+import logging
+import subprocess
+import tempfile
+import sys
+
+from aptsources.sourceslist import SourceEntry
+
+from dbus.mainloop.glib import DBusGMainLoop
+from softwareproperties.SoftwareProperties import SoftwareProperties
+
+DBUS_BUS_NAME = 'com.ubuntu.SoftwareProperties'
+DBUS_PATH = '/'
+DBUS_INTERFACE_NAME = 'com.ubuntu.SoftwareProperties'
+
+DBusGMainLoop(set_as_default=True)
+
+def _to_unicode(string):
+  if sys.version < '3':
+    return string.encode('utf-8')
+  else:
+    return string
+
+class PermissionDeniedByPolicy(dbus.DBusException):
+    _dbus_error_name = 'com.ubuntu.SoftwareProperties.PermissionDeniedByPolicy'
+
+class SoftwarePropertiesDBus(dbus.service.Object, SoftwareProperties):
+
+    def __init__(self, bus, options=None, datadir=None, rootdir="/"):
+        # init software properties
+        SoftwareProperties.__init__(self, options=options, datadir=datadir, rootdir=roo
